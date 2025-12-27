@@ -1,0 +1,180 @@
+---
+title: "Exploration of the Enron company Email Network"
+author: "Younes SOGANDI"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(tidytext)
+library(stringr)
+library(igraph)
+library(ggraph)
+library(tidyr)
+library(DT)
+library(ggrepel)
+
+# Load the data
+load("Enron.Rdata")
+
+# Ensure proper columns and formats
+message <- message %>% filter(!is.na(date), !is.na(sender))
+recipientinfo <- recipientinfo %>% filter(!is.na(rvalue))
+message$date <- as.POSIXct(message$date)
+```
+
+
+Introduction
+The Enron email dataset contains all email communications between 149 employees from 1999 to 2002. This report analyzes the activity, network, temporal patterns, and content of the emails. The analysis is divided into the following sections:
+
+Overview: Most active senders and receivers
+
+Roles and network analysis
+
+Temporal dynamics of email activity
+
+Content analysis
+
+Overview: Top senders and receivers
+Top Senders
+
+```
+top_senders <- message %>%
+  count(sender, sort = TRUE) %>%
+  slice_head(n = 15)
+
+ggplot(top_senders, aes(reorder(sender, n), n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(x = "", y = "Emails sent") +
+  theme_minimal()
+  
+# Top Recipients
+
+recipients <- recipientinfo %>%
+  count(rvalue, sort = TRUE) %>%
+  slice_head(n = 15)
+
+ggplot(recipients, aes(reorder(rvalue, n), n)) +
+  geom_col(fill = "coral") +
+  coord_flip() +
+  labs(x = "", y = "Emails received") +
+  theme_minimal()
+  
+```
+The plots show which employees were most active in sending and receiving emails, revealing key communication hubs within the organization.
+
+Roles and network analysis
+Employee status distribution
+
+```
+employeelist %>%
+  count(status, sort = TRUE) %>%
+  ggplot(aes(reorder(status, n), n)) +
+  geom_col(fill = "lightgreen") +
+  coord_flip() +
+  labs(x = "", y = "Number of employees") +
+  theme_minimal()
+Network centrality
+Code snippet
+
+edges <- recipientinfo %>%
+  left_join(message %>% select(mid, sender), by = "mid") %>%
+  transmute(from = sender, to = rvalue) %>%
+  filter(!is.na(from), !is.na(to))
+
+g <- graph_from_data_frame(edges, directed = TRUE)
+
+centrality <- data.frame(
+  Name = V(g)$name,
+  InDegree = degree(g, mode = "in"),
+  OutDegree = degree(g, mode = "out")
+)
+
+centrality_top <- centrality %>%
+  arrange(desc(OutDegree)) %>%
+  slice_head(n = 15)
+
+datatable(centrality_top, options = list(pageLength = 15))
+
+# Communication network visualization
+
+
+top_nodes <- names(sort(degree(g), decreasing = TRUE))[1:30]
+g_small <- induced_subgraph(g, vids = top_nodes)
+
+node_data <- data.frame(name = V(g_small)$name) %>%
+  left_join(employeelist %>% select(email, status), by = c("name" = "email"))
+
+V(g_small)$status <- node_data$status
+
+ggraph(g_small, layout = 'fr') +
+  geom_edge_link(alpha = 0.3, arrow = arrow(length = unit(2, 'mm'))) +
+  geom_node_point(aes(color = status), size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+  theme_void() +
+  labs(color = "Status")
+The network graph highlights the central actors in email communications and how employee roles (status) influence connections.
+
+# Temporal dynamics
+
+message %>%
+  mutate(day = as.Date(date)) %>%
+  count(day) %>%
+  ggplot(aes(day, n)) +
+  geom_line(color = "steelblue", size = 0.8) +
+  geom_point(color = "steelblue", size = 1.5) +
+  geom_vline(xintercept = as.Date("2001-10-31"), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = as.Date("2001-12-02"), linetype = "dashed", color = "darkred") +
+  labs(x = "Date", y = "Daily emails") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Oct 31, 2001: SEC launches investigation into Enron
+
+Dec 2, 2001: Enron files for bankruptcy
+
+Spikes or drops in email activity around major events reflect internal responses to crises.
+
+Content analysis
+Most frequent words
+```
+
+text_data <- message %>%
+  mutate(text = paste(subject)) %>%
+  unnest_tokens(word, text) %>%
+  anti_join(get_stopwords(), by = "word") %>%
+  mutate(word = str_remove_all(word, "[^a-zA-Z]")) %>%
+  filter(word != "")
+
+top_words <- text_data %>%
+  count(word, sort = TRUE) %>%
+  slice_head(n = 25)
+
+ggplot(top_words, aes(reorder(word, n), n)) +
+  geom_col(fill = "darkgreen") +
+  coord_flip() +
+  labs(x = "", y = "Frequency") +
+  theme_minimal()
+
+# TF-IDF by sender
+
+
+tfidf_table <- text_data %>%
+  count(sender, word) %>%
+  bind_tf_idf(word, sender, n) %>%
+  arrange(desc(tf_idf)) %>%
+  slice_head(n = 20) %>%
+  select(sender, word, tf_idf)
+
+datatable(tfidf_table, options = list(pageLength = 20))
+
+```
+TF-IDF highlights words that are distinctive to specific employees, providing insights into topic specialization.
+
+Conclusion : 
+This report explored the Enron email dataset through multiple lenses: user activity, roles, network structure, temporal dynamics, and content. The analysis confirms the importance of certain central employees and illustrates how external events influenced internal communication.
